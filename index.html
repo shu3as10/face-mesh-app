@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>顔認識アプリ with Firebase</title>
+    <title>顔特徴抽出アプリ</title>
     
     <!-- MediaPipe -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
@@ -44,20 +44,26 @@
             top: 10px;
             left: 10px;
             color: white;
-            background-color: rgba(0,0,0,0.7);
-            padding: 10px;
+            background-color: rgba(0,0,0,0.8);
+            padding: 15px;
             border-radius: 5px;
-            font-size: 14px;
+            font-size: 12px;
             max-width: 300px;
+            max-height: 80vh;
+            overflow-y: auto;
         }
-        .status {
+        .feature-item {
+            margin: 5px 0;
+            padding: 3px 0;
+            border-bottom: 1px solid #333;
+        }
+        .feature-label {
             color: #00ff00;
+            font-weight: bold;
         }
-        .error {
-            color: #ff0000;
-        }
-        .success {
-            color: #00ff00;
+        .feature-value {
+            color: #ffffff;
+            float: right;
         }
         #startButton, #saveButton {
             position: absolute;
@@ -82,7 +88,15 @@
         }
         #saveButton:disabled {
             background-color: #666;
-            cursor: not-allowed;
+        }
+        .status {
+            color: #00ff00;
+        }
+        .success {
+            color: #00ff00;
+        }
+        .error {
+            color: #ff0000;
         }
     </style>
 </head>
@@ -91,12 +105,11 @@
         <video id="video" autoplay playsinline></video>
         <canvas id="canvas"></canvas>
         
-        <div class="info">
-            <div><strong>顔認識アプリ with Firebase</strong></div>
+        <div class="info" id="featureInfo">
+            <div><strong>顔特徴抽出アプリ</strong></div>
             <div class="status" id="status">準備中...</div>
-            <div id="landmarkCount">検出ポイント: 0</div>
+            <div id="features"></div>
             <div id="saveStatus"></div>
-            <div id="recordCount" style="margin-top: 10px;">保存済み: 0件</div>
         </div>
 
         <button id="startButton">カメラを起動</button>
@@ -105,7 +118,7 @@
 
     <script>
         // ========================================
-        // Firebase設定（ここに自分の設定を貼り付け）
+        // Firebase設定
         // ========================================
         const firebaseConfig = {
             apiKey: "AIzaSyB7yPwbMIxEvZKSIeezbzGVqhcslr6jrCo",
@@ -116,8 +129,6 @@
             appId: "1:906933020073:web:8ca92132f0819b32cb10b8"
         };
 
-
-        // Firebaseを初期化
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
 
@@ -128,22 +139,119 @@
         const canvasElement = document.getElementById('canvas');
         const canvasCtx = canvasElement.getContext('2d');
         const statusElement = document.getElementById('status');
-        const landmarkCountElement = document.getElementById('landmarkCount');
+        const featuresElement = document.getElementById('features');
         const saveStatusElement = document.getElementById('saveStatus');
-        const recordCountElement = document.getElementById('recordCount');
         const startButton = document.getElementById('startButton');
         const saveButton = document.getElementById('saveButton');
 
         let faceMesh;
         let camera;
         let currentLandmarks = null;
-        let saveCount = 0;
+        let currentFeatures = null;
 
-        // ユーザーIDを生成（ブラウザごとに固有）
         let userId = localStorage.getItem('userId');
         if (!userId) {
             userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             localStorage.setItem('userId', userId);
+        }
+
+        // ========================================
+        // 距離計算関数
+        // ========================================
+        function calculateDistance2D(point1, point2) {
+            const dx = point2.x - point1.x;
+            const dy = point2.y - point1.y;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        // ========================================
+        // 顔の特徴を抽出
+        // ========================================
+        function extractFaceFeatures(landmarks) {
+            const features = {};
+            
+            // 顔の幅
+            features.faceWidth = calculateDistance2D(landmarks[234], landmarks[454]);
+            
+            // 顔の高さ
+            features.faceHeight = calculateDistance2D(landmarks[10], landmarks[152]);
+            
+            // 顔の縦横比
+            features.faceAspectRatio = features.faceHeight / features.faceWidth;
+            
+            // 右目の幅と高さ
+            features.rightEyeWidth = calculateDistance2D(landmarks[133], landmarks[33]);
+            features.rightEyeHeight = calculateDistance2D(landmarks[159], landmarks[145]);
+            features.rightEyeAspectRatio = features.rightEyeHeight / features.rightEyeWidth;
+            
+            // 左目の幅と高さ
+            features.leftEyeWidth = calculateDistance2D(landmarks[362], landmarks[263]);
+            features.leftEyeHeight = calculateDistance2D(landmarks[386], landmarks[374]);
+            features.leftEyeAspectRatio = features.leftEyeHeight / features.leftEyeWidth;
+            
+            // 平均目の大きさ
+            features.avgEyeWidth = (features.rightEyeWidth + features.leftEyeWidth) / 2;
+            features.avgEyeAspectRatio = (features.rightEyeAspectRatio + features.leftEyeAspectRatio) / 2;
+            
+            // 目と目の距離
+            features.eyeDistance = calculateDistance2D(landmarks[133], landmarks[362]);
+            
+            // 鼻の幅と高さ
+            features.noseWidth = calculateDistance2D(landmarks[219], landmarks[439]);
+            features.noseHeight = calculateDistance2D(landmarks[4], landmarks[1]);
+            
+            // 口の幅と高さ
+            features.mouthWidth = calculateDistance2D(landmarks[78], landmarks[308]);
+            features.mouthHeight = calculateDistance2D(landmarks[0], landmarks[17]);
+            features.mouthAspectRatio = features.mouthHeight / features.mouthWidth;
+            
+            // 眉の高さ
+            features.rightEyebrowHeight = calculateDistance2D(landmarks[70], landmarks[159]);
+            features.leftEyebrowHeight = calculateDistance2D(landmarks[300], landmarks[386]);
+            
+            // 正規化された値
+            features.normalizedEyeWidth = features.avgEyeWidth / features.faceWidth;
+            features.normalizedNoseWidth = features.noseWidth / features.faceWidth;
+            features.normalizedMouthWidth = features.mouthWidth / features.faceWidth;
+            features.normalizedEyeDistance = features.eyeDistance / features.faceWidth;
+            
+            return features;
+        }
+
+        // ========================================
+        // 特徴を画面に表示
+        // ========================================
+        function displayFeatures(features) {
+            let html = '<div style="margin-top: 10px;"><strong>検出された特徴:</strong></div>';
+            
+            const featureList = [
+                { label: '顔の幅', value: (features.faceWidth * 100).toFixed(1) + ' cm相当', key: 'faceWidth' },
+                { label: '顔の高さ', value: (features.faceHeight * 100).toFixed(1) + ' cm相当', key: 'faceHeight' },
+                { label: '顔の縦横比', value: features.faceAspectRatio.toFixed(2), key: 'faceAspectRatio' },
+                { label: '右目の幅', value: (features.rightEyeWidth * 100).toFixed(1) + ' mm相当', key: 'rightEyeWidth' },
+                { label: '左目の幅', value: (features.leftEyeWidth * 100).toFixed(1) + ' mm相当', key: 'leftEyeWidth' },
+                { label: '平均目の幅', value: (features.avgEyeWidth * 100).toFixed(1) + ' mm相当', key: 'avgEyeWidth' },
+                { label: '目の開き具合', value: features.avgEyeAspectRatio.toFixed(3), key: 'avgEyeAspectRatio' },
+                { label: '目と目の距離', value: (features.eyeDistance * 100).toFixed(1) + ' mm相当', key: 'eyeDistance' },
+                { label: '鼻の幅', value: (features.noseWidth * 100).toFixed(1) + ' mm相当', key: 'noseWidth' },
+                { label: '鼻の高さ', value: (features.noseHeight * 100).toFixed(1) + ' mm相当', key: 'noseHeight' },
+                { label: '口の幅', value: (features.mouthWidth * 100).toFixed(1) + ' mm相当', key: 'mouthWidth' },
+                { label: '口の開き', value: (features.mouthHeight * 100).toFixed(1) + ' mm相当', key: 'mouthHeight' },
+                { label: '正規化目幅', value: (features.normalizedEyeWidth * 100).toFixed(1) + '%', key: 'normalizedEyeWidth' },
+                { label: '正規化鼻幅', value: (features.normalizedNoseWidth * 100).toFixed(1) + '%', key: 'normalizedNoseWidth' },
+                { label: '正規化口幅', value: (features.normalizedMouthWidth * 100).toFixed(1) + '%', key: 'normalizedMouthWidth' }
+            ];
+            
+            featureList.forEach(item => {
+                html += `
+                    <div class="feature-item">
+                        <span class="feature-label">${item.label}:</span>
+                        <span class="feature-value">${item.value}</span>
+                    </div>
+                `;
+            });
+            
+            featuresElement.innerHTML = html;
         }
 
         // ========================================
@@ -206,7 +314,12 @@
                 const landmarks = results.multiFaceLandmarks[0];
                 currentLandmarks = landmarks;
                 
-                landmarkCountElement.textContent = `検出ポイント: ${landmarks.length}`;
+                // 特徴を抽出
+                currentFeatures = extractFaceFeatures(landmarks);
+                
+                // 特徴を表示
+                displayFeatures(currentFeatures);
+                
                 saveButton.disabled = false;
                 
                 // メッシュ描画
@@ -219,8 +332,9 @@
                 drawConnectors(canvasCtx, landmarks, FACEMESH_LIPS, 
                              {color: '#E0E0E0', lineWidth: 2});
             } else {
-                landmarkCountElement.textContent = '検出ポイント: 0（顔が見つかりません）';
+                featuresElement.innerHTML = '<div style="margin-top: 10px; color: #ff0000;">顔が検出されていません</div>';
                 currentLandmarks = null;
+                currentFeatures = null;
                 saveButton.disabled = true;
             }
             
@@ -231,7 +345,7 @@
         // Firestoreにデータを保存
         // ========================================
         saveButton.addEventListener('click', async () => {
-            if (!currentLandmarks) {
+            if (!currentLandmarks || !currentFeatures) {
                 saveStatusElement.textContent = 'エラー: 顔が検出されていません';
                 saveStatusElement.className = 'error';
                 return;
@@ -259,6 +373,7 @@
                     timestamp: firebase.firestore.FieldValue.serverTimestamp(),
                     landmarkCount: landmarksArray.length,
                     landmarks: landmarksArray,
+                    features: currentFeatures,  // ← 特徴データも保存
                     userAgent: navigator.userAgent,
                     screenSize: {
                         width: window.innerWidth,
@@ -266,14 +381,12 @@
                     }
                 });
 
-                saveCount++;
                 saveStatusElement.textContent = '✓ 保存成功！ ID: ' + docRef.id.substr(0, 8) + '...';
                 saveStatusElement.className = 'success';
-                recordCountElement.textContent = `保存済み: ${saveCount}件`;
                 
                 console.log('保存成功:', docRef.id);
+                console.log('特徴データ:', currentFeatures);
                 
-                // 3秒後にメッセージをクリア
                 setTimeout(() => {
                     saveStatusElement.textContent = '';
                     saveButton.disabled = false;

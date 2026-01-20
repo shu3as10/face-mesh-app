@@ -3,11 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>顔認識アプリ</title>
+    <title>顔認識アプリ with Firebase</title>
+    
+    <!-- MediaPipe -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+    
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    
     <style>
         body {
             margin: 0;
@@ -41,22 +48,41 @@
             padding: 10px;
             border-radius: 5px;
             font-size: 14px;
+            max-width: 300px;
         }
         .status {
             color: #00ff00;
         }
-        #startButton {
+        .error {
+            color: #ff0000;
+        }
+        .success {
+            color: #00ff00;
+        }
+        #startButton, #saveButton {
             position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
             padding: 20px 40px;
             font-size: 18px;
-            background-color: #4CAF50;
             color: white;
             border: none;
             border-radius: 10px;
             cursor: pointer;
+        }
+        #startButton {
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: #4CAF50;
+        }
+        #saveButton {
+            bottom: 20px;
+            right: 20px;
+            background-color: #2196F3;
+            display: none;
+        }
+        #saveButton:disabled {
+            background-color: #666;
+            cursor: not-allowed;
         }
     </style>
 </head>
@@ -66,26 +92,63 @@
         <canvas id="canvas"></canvas>
         
         <div class="info">
-            <div>顔認識アプリ</div>
+            <div><strong>顔認識アプリ with Firebase</strong></div>
             <div class="status" id="status">準備中...</div>
             <div id="landmarkCount">検出ポイント: 0</div>
+            <div id="saveStatus"></div>
+            <div id="recordCount" style="margin-top: 10px;">保存済み: 0件</div>
         </div>
 
         <button id="startButton">カメラを起動</button>
+        <button id="saveButton" disabled>データを保存</button>
     </div>
 
     <script>
+        // ========================================
+        // Firebase設定（ここに自分の設定を貼り付け）
+        // ========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyB7yPwbMIxEvZKSIeezbzGVqhcslr6jrCo",
+            authDomain: "face-mesh-data.firebaseapp.com",
+            projectId: "face-mesh-data",
+            storageBucket: "face-mesh-data.firebasestorage.app",
+            messagingSenderId: "906933020073",
+            appId: "1:906933020073:web:8ca92132f0819b32cb10b8"
+        };
+
+
+        // Firebaseを初期化
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        // ========================================
+        // 変数の定義
+        // ========================================
         const videoElement = document.getElementById('video');
         const canvasElement = document.getElementById('canvas');
         const canvasCtx = canvasElement.getContext('2d');
         const statusElement = document.getElementById('status');
         const landmarkCountElement = document.getElementById('landmarkCount');
+        const saveStatusElement = document.getElementById('saveStatus');
+        const recordCountElement = document.getElementById('recordCount');
         const startButton = document.getElementById('startButton');
+        const saveButton = document.getElementById('saveButton');
 
         let faceMesh;
         let camera;
+        let currentLandmarks = null;
+        let saveCount = 0;
 
-        // カメラ起動ボタン
+        // ユーザーIDを生成（ブラウザごとに固有）
+        let userId = localStorage.getItem('userId');
+        if (!userId) {
+            userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            localStorage.setItem('userId', userId);
+        }
+
+        // ========================================
+        // カメラ起動
+        // ========================================
         startButton.addEventListener('click', async () => {
             startButton.style.display = 'none';
             await initializeFaceMesh();
@@ -94,7 +157,6 @@
         async function initializeFaceMesh() {
             statusElement.textContent = '初期化中...';
 
-            // Face Meshの設定
             faceMesh = new FaceMesh({
                 locateFile: (file) => {
                     return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
@@ -110,7 +172,6 @@
 
             faceMesh.onResults(onResults);
 
-            // カメラの起動
             try {
                 camera = new Camera(videoElement, {
                     onFrame: async () => {
@@ -122,63 +183,113 @@
                 
                 await camera.start();
                 statusElement.textContent = '実行中';
+                saveButton.style.display = 'block';
                 
-                // キャンバスのサイズ設定
                 canvasElement.width = window.innerWidth;
                 canvasElement.height = window.innerHeight;
             } catch (error) {
                 statusElement.textContent = 'エラー: ' + error.message;
+                statusElement.className = 'error';
                 console.error('カメラエラー:', error);
             }
         }
 
-        // 顔のランドマークを処理
+        // ========================================
+        // 顔のランドマーク処理
+        // ========================================
         function onResults(results) {
-            // キャンバスをクリア
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            
-            // 映像を描画
             canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
             
             if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
                 const landmarks = results.multiFaceLandmarks[0];
+                currentLandmarks = landmarks;
                 
-                // 検出ポイント数を表示
                 landmarkCountElement.textContent = `検出ポイント: ${landmarks.length}`;
+                saveButton.disabled = false;
                 
-                // 顔のメッシュを描画
+                // メッシュ描画
                 drawConnectors(canvasCtx, landmarks, FACEMESH_TESSELATION,
                              {color: '#C0C0C070', lineWidth: 1});
-                
-                // 目の輪郭を描画
                 drawConnectors(canvasCtx, landmarks, FACEMESH_RIGHT_EYE, 
                              {color: '#FF3030', lineWidth: 2});
                 drawConnectors(canvasCtx, landmarks, FACEMESH_LEFT_EYE, 
                              {color: '#30FF30', lineWidth: 2});
-                
-                // 唇の輪郭を描画
                 drawConnectors(canvasCtx, landmarks, FACEMESH_LIPS, 
                              {color: '#E0E0E0', lineWidth: 2});
-                
-                // ランドマークデータをコンソールに出力（開発者用）
-                console.log('ランドマーク数:', landmarks.length);
-                
-                // 例：鼻の頭の座標（ポイント1番）
-                const noseTip = landmarks[1];
-                console.log('鼻の座標:', {
-                    x: noseTip.x,
-                    y: noseTip.y,
-                    z: noseTip.z
-                });
             } else {
                 landmarkCountElement.textContent = '検出ポイント: 0（顔が見つかりません）';
+                currentLandmarks = null;
+                saveButton.disabled = true;
             }
             
             canvasCtx.restore();
         }
 
+        // ========================================
+        // Firestoreにデータを保存
+        // ========================================
+        saveButton.addEventListener('click', async () => {
+            if (!currentLandmarks) {
+                saveStatusElement.textContent = 'エラー: 顔が検出されていません';
+                saveStatusElement.className = 'error';
+                return;
+            }
+
+            saveButton.disabled = true;
+            saveStatusElement.textContent = '保存中...';
+            saveStatusElement.className = 'status';
+
+            try {
+                // ランドマークデータを配列に変換
+                const landmarksArray = [];
+                for (let i = 0; i < currentLandmarks.length; i++) {
+                    landmarksArray.push({
+                        index: i,
+                        x: currentLandmarks[i].x,
+                        y: currentLandmarks[i].y,
+                        z: currentLandmarks[i].z
+                    });
+                }
+
+                // Firestoreに保存
+                const docRef = await db.collection('face_landmarks').add({
+                    userId: userId,
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+                    landmarkCount: landmarksArray.length,
+                    landmarks: landmarksArray,
+                    userAgent: navigator.userAgent,
+                    screenSize: {
+                        width: window.innerWidth,
+                        height: window.innerHeight
+                    }
+                });
+
+                saveCount++;
+                saveStatusElement.textContent = '✓ 保存成功！ ID: ' + docRef.id.substr(0, 8) + '...';
+                saveStatusElement.className = 'success';
+                recordCountElement.textContent = `保存済み: ${saveCount}件`;
+                
+                console.log('保存成功:', docRef.id);
+                
+                // 3秒後にメッセージをクリア
+                setTimeout(() => {
+                    saveStatusElement.textContent = '';
+                    saveButton.disabled = false;
+                }, 3000);
+
+            } catch (error) {
+                saveStatusElement.textContent = '✗ 保存エラー: ' + error.message;
+                saveStatusElement.className = 'error';
+                console.error('保存エラー:', error);
+                saveButton.disabled = false;
+            }
+        });
+
+        // ========================================
         // 画面リサイズ対応
+        // ========================================
         window.addEventListener('resize', () => {
             if (canvasElement) {
                 canvasElement.width = window.innerWidth;

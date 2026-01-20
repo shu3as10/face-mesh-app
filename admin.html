@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>管理者ページ</title>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .login-form {
+            max-width: 400px;
+            margin: 0 auto;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            font-size: 16px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        .data-list {
+            margin-top: 20px;
+        }
+        .data-item {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>顔認識データ 管理者ページ</h1>
+
+    <!-- ログインフォーム -->
+    <div id="loginSection" class="login-form">
+        <h2>ログイン</h2>
+        <input type="email" id="email" placeholder="メールアドレス">
+        <input type="password" id="password" placeholder="パスワード">
+        <button onclick="login()">ログイン</button>
+        <div id="loginStatus"></div>
+    </div>
+
+    <!-- データ表示エリア -->
+    <div id="dataSection" class="hidden">
+        <button onclick="loadData()">データを読み込む</button>
+        <button onclick="exportData()">JSONでエクスポート</button>
+        <button onclick="logout()">ログアウト</button>
+        <div id="dataCount"></div>
+        <div id="dataList" class="data-list"></div>
+    </div>
+
+    <script>
+        // Firebase設定
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const auth = firebase.auth();
+
+        // ログイン状態監視
+        auth.onAuthStateChanged((user) => {
+            if (user) {
+                document.getElementById('loginSection').classList.add('hidden');
+                document.getElementById('dataSection').classList.remove('hidden');
+            } else {
+                document.getElementById('loginSection').classList.remove('hidden');
+                document.getElementById('dataSection').classList.add('hidden');
+            }
+        });
+
+        // ログイン
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            
+            try {
+                await auth.signInWithEmailAndPassword(email, password);
+                document.getElementById('loginStatus').textContent = 'ログイン成功';
+            } catch (error) {
+                document.getElementById('loginStatus').textContent = 'エラー: ' + error.message;
+            }
+        }
+
+        // ログアウト
+        function logout() {
+            auth.signOut();
+        }
+
+        // データ読み込み
+        async function loadData() {
+            try {
+                const snapshot = await db.collection('face_landmarks')
+                    .orderBy('timestamp', 'desc')
+                    .limit(50)
+                    .get();
+
+                const dataList = document.getElementById('dataList');
+                dataList.innerHTML = '';
+
+                document.getElementById('dataCount').textContent = 
+                    `全${snapshot.size}件のデータ（最新50件を表示）`;
+
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    const item = document.createElement('div');
+                    item.className = 'data-item';
+                    item.innerHTML = `
+                        <strong>ID:</strong> ${doc.id}<br>
+                        <strong>ユーザーID:</strong> ${data.userId}<br>
+                        <strong>日時:</strong> ${data.timestamp ? data.timestamp.toDate().toLocaleString('ja-JP') : '不明'}<br>
+                        <strong>ランドマーク数:</strong> ${data.landmarkCount}<br>
+                        <button onclick="deleteData('${doc.id}')">削除</button>
+                    `;
+                    dataList.appendChild(item);
+                });
+            } catch (error) {
+                alert('エラー: ' + error.message);
+            }
+        }
+
+        // データ削除
+        async function deleteData(docId) {
+            if (!confirm('本当に削除しますか？')) return;
+            
+            try {
+                await db.collection('face_landmarks').doc(docId).delete();
+                alert('削除しました');
+                loadData();
+            } catch (error) {
+                alert('削除エラー: ' + error.message);
+            }
+        }
+
+        // JSONエクスポート
+        async function exportData() {
+            try {
+                const snapshot = await db.collection('face_landmarks').get();
+                const allData = [];
+
+                snapshot.forEach(doc => {
+                    allData.push({
+                        id: doc.id,
+                        ...doc.data()
+                    });
+                });
+
+                const dataStr = JSON.stringify(allData, null, 2);
+                const dataBlob = new Blob([dataStr], {type: 'application/json'});
+                const url = URL.createObjectURL(dataBlob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'face_landmarks_' + Date.now() + '.json';
+                link.click();
+
+                alert(`${allData.length}件のデータをダウンロードしました`);
+            } catch (error) {
+                alert('エラー: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
